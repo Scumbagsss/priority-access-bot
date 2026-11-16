@@ -77,3 +77,5 @@ Read [Architecture](docs/ARCHITECTURE.md) and [Failure and security design](docs
 This showcase explains a real integration problem and the engineering decisions it creates. It does **not** claim to demonstrate executable backend logic in this repository. For a runnable self-contained Python example with persistence, authorization and automated tests, see [Discord Ticket Backend Demo](https://github.com/Scumbagsss/advanced-discord-ticket-bot).
 
 **Author:** [Scumbagsss](https://github.com/Scumbagsss) · Python backend · automation
+
+**Contact:** Discord — `scumbagsss` · Telegram — [@dilarion](https://t.me/dilarion).
