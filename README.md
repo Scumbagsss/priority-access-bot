@@ -10,6 +10,10 @@
 
 > **Two distinct parts:** The commercial Discord priority-access application remains **private** and is not deployable from this repository. The `api_demo/` directory is a separate **runnable, synthetic FastAPI backend** designed to demonstrate Python engineering skills without exposing the actual API or player data.
 
+![Synthetic FastAPI request approval visualization](assets/api-demo.svg)
+
+*Fictional members and local-only entitlements. The diagram does not represent a production screenshot or a connection to Steam/DayZ services.*
+
 ## What problem does priority access solve?
 
 Server priority access involves identity checks, staff approval, entitlement state, database consistency and error handling. Simply adding a Discord role does not implement a complete access workflow.
