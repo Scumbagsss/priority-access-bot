@@ -14,6 +14,38 @@
 
 *Concept illustration: local-only simulated entitlements, not production screenshots.*
 
+## PostgreSQL + Docker deployment example (new)
+
+[![PostgreSQL deployment demo](https://github.com/Scumbagsss/priority-access-bot/actions/workflows/postgres-service.yml/badge.svg)](https://github.com/Scumbagsss/priority-access-bot/actions/workflows/postgres-service.yml)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.x-CB3C3C)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+
+The **[PostgreSQL variant](postgres_app/)** is an **independent, deployable synthetic FastAPI application** alongside the original lightweight SQLite demo. It adds:
+
+- **PostgreSQL 16** with SQLAlchemy 2 ORM, explicit relationships and transactional state;
+- **versioned Alembic migrations** (no automatic `create_all` on startup);
+- **Dockerfile + Compose**: health-checked database, an API on `127.0.0.1:8000`, non-root application container and persistent volume;
+- **local user provisioning** and hashed, revocable bearer sessions;
+- **row locking and a partial unique index** to handle concurrent reviews and duplicate submissions;
+- **isolated PostgreSQL integration tests** and GitHub Actions Docker Compose startup checks.
+
+### Run PostgreSQL version locally
+
+```bash
+cp deployment.env.example .env
+# Change POSTGRES_PASSWORD in .env to a long random local secret!
+docker compose up -d --build --wait
+docker compose exec -it api python -m postgres_app.cli demo-member
+docker compose exec -it api python -m postgres_app.cli demo-moderator --staff
+```
+
+Open **http://127.0.0.1:8000/docs** to test a fictional request. The [deployment guide](docs/POSTGRES_DEPLOYMENT.md) includes migration commands, database persistence, test isolation and shutdown instructions.
+
+> **Deployment boundary:** this is a *self-hosted educational example*, not a public production service. It has **no** real Discord/Steam/DayZ API integration or server-access delivery. It lacks public-facing safeguards including login throttling, MFA, TLS termination, monitoring and backup automation. **Do not expose it to the internet as-is.**
+
+The smaller SQLite demo below remains runnable without Docker, PostgreSQL or additional deployment configuration.
+
 ## The backend problem
 
 An access-request workflow combines user identity, staff permissions, approval state, safe retries and audit records. A real backend cannot trust a client-supplied role or repeat external delivery blindly.
