@@ -1,94 +1,96 @@
-# Synthetic FastAPI API — technical notes
+# Synthetic FastAPI demo — authentication, requests and SQLite
 
-> **Independent portfolio sample, not a DayZ or Discord production system.** No real server, Steam registration endpoint, payment gateway or private entitlement service is contacted.
+> Independent local-only Python backend. Not a production Discord or DayZ API and does not grant actual game access.
 
-## Data flow
-
-1. Caller sends an `X-API-Key`. The server maps that key to one of a small set of *preconfigured synthetic principals*.
-2. Member sends a SteamID64-shaped string and reason to `POST /requests`.
-3. The service validates basic syntax and uses `BEGIN IMMEDIATE` plus a partial UNIQUE index to guarantee at most one pending request for the same synthetic owner and Steam ID.
-4. A staff principal approves or rejects the request.
-5. On approval, **one local SQLite entitlement record** is created in the same transaction. A second approval is idempotent.
-6. `GET /entitlements/me` calculates active vs expired from an explicit timestamp; it does **not** revoke real game permissions.
-
-```mermaid
-stateDiagram-v2
-  [*] --> pending: submit
-  pending --> approved: staff approves
-  pending --> rejected: staff rejects
-  approved --> approved: repeat approve (no-op)
-  rejected --> rejected: repeat reject (no-op)
-```
-
-The actual entitlement row is time-limited to **three hours in this demo**. This is only a code example. It does not imply that the private product follows the same policy.
-
-## Endpoints
-
-| Method | Path | Who | Meaning |
-| --- | --- | --- | --- |
-| GET | `/health` | Public | Show synthetic-mode health |
-| POST | `/requests` | Authenticated | Submit, or reuse, a pending request |
-| GET | `/requests` | Staff | Paginated request list |
-| GET | `/requests/{id}` | Owner / staff | Read request |
-| POST | `/requests/{id}/approve` | Staff | Atomic local-only grant |
-| POST | `/requests/{id}/reject` | Staff | Reject with reason |
-| GET | `/requests/{id}/events` | Owner / staff | Audit events |
-| GET | `/entitlements/me` | Authenticated | Own synthetic entitlements |
-
-### Example calls
-
-Run the API from the repository root (Unix-like shell):
+## Setup
 
 ```bash
 python -m pip install -r requirements-demo.txt
-export DEMO_MEMBER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
-export DEMO_STAFF_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
-export DEMO_DB_PATH="priority-demo.sqlite3"
+python -m api_demo.manage --db priority-demo.sqlite3 create-user --username demo-member
+python -m api_demo.manage --db priority-demo.sqlite3 create-user --username demo-moderator --staff
 uvicorn api_demo.main:create_app_from_env --factory --host 127.0.0.1 --port 8000
 ```
 
-In a second terminal, use the **same member token**:
+Run all commands from the repository root. The CLI uses `getpass` to request a password twice. Choose a distinct strong password for each fictional account. The Uvicorn factory reads `DEMO_DB_PATH` if set (otherwise `priority-demo.sqlite3`). No production credentials are required.
+
+### Authentication examples
+
+Use HTTP JSON to log in:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/requests \
-  -H "X-API-Key: $DEMO_MEMBER_TOKEN" \
+curl -X POST http://127.0.0.1:8000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"steam_id":"76561198000000001","reason":"Synthetic demo access request"}'
+  -d '{"username":"demo-member","password":"YOUR_LOCAL_DEMO_PASSWORD"}'
 ```
 
-The returned ID can then be approved with the staff token:
+The response contains a random `access_token`, `token_type: bearer` and an expiry timestamp. Use that token in subsequent calls:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/requests/1/approve \
-  -H "X-API-Key: $DEMO_STAFF_TOKEN"
+curl http://127.0.0.1:8000/auth/me -H "Authorization: Bearer YOUR_SESSION_TOKEN"
+curl -X POST http://127.0.0.1:8000/requests \
+  -H "Authorization: Bearer YOUR_SESSION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"steam_id":"76561198000000001","reason":"Synthetic demonstration request"}'
 ```
 
-Open `http://127.0.0.1:8000/docs` for generated OpenAPI docs. The environment variables used by the running service must be set in the shell where Uvicorn is launched.
+The moderator's separately obtained session can approve an existing request ID using `POST /requests/{id}/approve`. Use `POST /auth/logout` with the session header to revoke it. For interactive calls, open `http://127.0.0.1:8000/docs`.
 
-## Defensive decisions demonstrated
+**Never send passwords or tokens to public services.** Commands above are for local loopback testing.
 
-- No working credentials checked into the source: both demo tokens are **mandatory environment variables**.
-- API identities/roles are configured server-side; a user-submitted role flag cannot grant staff rights.
-- HTTP 401 for missing/wrong keys, 403 for staff-only operations, 404 for another user's record, and 409 for invalid decision transitions.
-- Request creation and approvals use SQLite write transactions; duplicate approvals cannot multiply local entitlements.
-- Ownership checks apply to request details and audit history.
-- SQLite queries use bound parameters.
-- The database is committed or rolled back and its connections are closed after each operation.
-- No real game-system connection is made.
+## Identity and authorization
 
-## Explicit omissions
+1. Operators create fictional local users through the CLI; account provisioning has **no HTTP endpoint**.
+2. Login validates salted scrypt password hashes and returns a cryptographically random opaque token.
+3. The database stores only a hash of the token; token possession authenticates the caller for at most 60 minutes.
+4. Every API request resolves the token from SQLite, verifies expiry and account status, and fetches the **current** staff flag.
+5. Logout deletes the corresponding session row, immediately rejecting future use.
+6. Staff permissions and request ownership are enforced by backend services independently of client UI.
 
-- A fixed token-to-principal map is a **test fixture**, not a production identity provider. For real use, replace it with a mature auth system (JWT/OAuth2 with validated claims, session management, rotation, rate limits, TLS, monitoring).
-- SteamID64 **syntax** validation does not prove account registration or identity ownership.
-- No external delivery semantics, webhook retries or outbox/reconciliation service.
-- No production migration mechanism, monitoring, request throttling, distributed coordination or deployment hardening.
-- The local "expired" status is a read-time projection, **not** an external entitlement revocation.
-- All player identities in examples are invented.
+A hidden button or client-provided `staff=true` cannot grant authority.
 
-## Verification
+## Request lifecycle
+
+```mermaid
+stateDiagram-v2
+  [*] --> pending: member submits
+  pending --> approved: staff approves
+  pending --> rejected: staff rejects
+  approved --> approved: repeat approve is no-op
+  rejected --> rejected: repeat reject is no-op
+```
+
+A database partial UNIQUE index prevents duplicate pending requests for the same synthetic account and SteamID-like value. SQLite `BEGIN IMMEDIATE` serializes approval decisions. Exactly one local entitlement row is inserted on approval; audit rows record each decision.
+
+In this **demo** the local entitlement expires after three hours. Reading expired state does not remove real server permissions—no external service is contacted.
+
+## Endpoints
+
+| HTTP | Path | Requirement |
+|---|---|---|
+| GET | `/health` | Public |
+| POST | `/auth/login` | Existing local account + password |
+| GET | `/auth/me` | Active session |
+| POST | `/auth/logout` | Active session |
+| POST | `/requests` | Active session |
+| GET | `/requests` | Staff |
+| GET | `/requests/{id}` | Request owner or staff |
+| POST | `/requests/{id}/approve` | Staff |
+| POST | `/requests/{id}/reject` | Staff |
+| GET | `/requests/{id}/events` | Request owner or staff |
+| GET | `/entitlements/me` | Active session |
+
+## Security decisions and limitations
+
+**Implemented in demo:** salted password hashing, randomly generated tokens, hashed token storage, expiry/revocation, role checks from database, owner isolation, bound SQL, atomic decisions, generic login errors.
+
+**Not implemented:** rate limiting, account lockout, password reset, email verification, MFA, identity federation, production credential management, TLS termination, CSRF protections for browser cookies (cookies aren't used), distributed session cache, monitoring, Alembic migrations, incident response processes.
+
+The example is **not suitable for public deployment** without those safeguards and a thorough independent review. SteamID-like syntax is not proof of account ownership or registration. Neither entitlement creation nor expiry is connected to DayZ.
+
+## Test suite
 
 ```bash
 python -m pytest -q tests/test_api_demo.py
 ```
 
-GitHub Actions runs this suite under Python 3.11, 3.12 and 3.13. Tests include authorization boundaries, owner isolation, approval idempotence, concurrency, expiration and SQLite persistence.
+The tests use fictional accounts and an injected clock for deterministic session expiry. CI runs against Python 3.11–3.13. The suite covers both HTTP responses and SQLite state, including revocation, role changes, concurrent approvals and audit events.
