@@ -1,81 +1,101 @@
-# Priority Access Bot
+# Priority Access Bot — FastAPI Backend Demo
 
-**A Discord-based entitlement approval workflow for private game-server communities.**
+**Private Discord entitlement workflow · Public synthetic REST API sample**
 
-![Python](https://img.shields.io/badge/Python-Backend-3776AB?logo=python&logoColor=white)
-![REST](https://img.shields.io/badge/REST-Integration-334155)
-![State](https://img.shields.io/badge/Focus-Workflow%20state-blue)
-![Source](https://img.shields.io/badge/Production%20code-private-orange)
+[![Synthetic FastAPI demo](https://github.com/Scumbagsss/priority-access-bot/actions/workflows/api-demo.yml/badge.svg)](https://github.com/Scumbagsss/priority-access-bot/actions/workflows/api-demo.yml)
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-REST-009688?logo=fastapi&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-Transactions-003B57?logo=sqlite&logoColor=white)
+![Source](https://img.shields.io/badge/Production%20bot-private-orange)
 
-> **Portfolio case study, not a runnable bot.** Production source and API adapters are intentionally private; the public `src/public_interface.py` shows interface signatures only.
+> **Two distinct parts:** The commercial Discord priority-access application remains **private** and is not deployable from this repository. The `api_demo/` directory is a separate **runnable, synthetic FastAPI backend** designed to demonstrate Python engineering skills without exposing the actual API or player data.
 
-## What problem does this solve?
+## What problem does priority access solve?
 
-Priority access for a game server is more than granting a role in Discord. A reliable workflow must validate a player's identity, prevent accidental repeat requests, route approvals to authorized staff, communicate with an external entitlement service and preserve an auditable result.
+Server priority access involves identity checks, staff approval, entitlement state, database consistency and error handling. Simply adding a Discord role does not implement a complete access workflow.
 
-This project documents the system boundaries and backend concerns of a private Discord-driven priority-access workflow.
+The private application integrates Discord interactions and a real server's access services. Its full code, customer information and private API are not published.
 
-## Request lifecycle
+## Public runnable FastAPI demonstration
+
+This standalone API implements a **fictional, local-only** version of the request lifecycle:
+
+- `POST /requests`: authenticated member creates a pending request; repeated submission returns the existing pending request.
+- `GET /requests`: staff list/paginate requests.
+- `GET /requests/{id}`: owner or staff can inspect a request.
+- `POST /requests/{id}/approve`: staff grants exactly one **local SQLite entitlement** in an atomic transaction.
+- `POST /requests/{id}/reject`: staff rejects with a required reason.
+- `GET /requests/{id}/events`: owner/staff view audit history.
+- `GET /entitlements/me`: inspect fictional entitlements and calculated expiry.
+- `GET /health`: minimal health response.
 
 ```mermaid
-stateDiagram-v2
-  [*] --> Submitted: request
-  Submitted --> Rejected: validation or staff denial
-  Submitted --> Approved: staff approval
-  Approved --> Delivering: private API adapter
-  Delivering --> Active: confirmed entitlement
-  Delivering --> NeedsReview: timeout / uncertain result
-  Active --> Expired: lifecycle policy
-  NeedsReview --> Active: verified delivery
-  NeedsReview --> Rejected: staff resolution
+flowchart LR
+    A[HTTP client] --> B[API key dependency]
+    B --> C[FastAPI handlers]
+    C --> D[AccessStore]
+    D --> E[(SQLite: requests)]
+    D --> F[(SQLite: entitlements)]
+    D --> G[(SQLite: audit events)]
 ```
 
-*This is a **conceptual state machine** for discussing design requirements; it is not evidence that all these states exist in the public skeleton or in every production deployment.*
+**Not connected to Steam or DayZ.** SteamID64-shaped values are checked for syntax only. The demo does not verify ownership or issue real server privileges.
 
-## Key backend concerns
+### Run locally
 
-| Concern | How the workflow is designed to address it |
-|---|---|
-| Identity validation | Check Steam64-like identifier syntax and query registration via an external adapter |
-| Authorization | Staff-only review actions with explicitly configured roles |
-| Request state | Distinguish pending, rejected, approved and delivery outcomes |
-| Duplicate delivery | Define idempotent delivery behavior rather than reissuing on retries |
-| Unavailable API | Preserve uncertain outcomes for reconciliation, not blind success claims |
-| Auditability | Record who requested, reviewed and delivered an entitlement |
-| Expiry | Model entitlement end-of-life and any renewal policy explicitly |
+Requires Python **3.11+**. Use two different, newly generated demo API keys; no actual keys are included in the repository.
 
-**Important:** exact policies and feature availability vary by deployment and are not independently verified by this public repository.
+```bash
+python -m pip install -r requirements-demo.txt
+export DEMO_MEMBER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+export DEMO_STAFF_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+uvicorn api_demo.main:create_app_from_env --factory --host 127.0.0.1 --port 8000
+```
 
-## Architecture
+Visit **http://127.0.0.1:8000/docs** for the interactive OpenAPI explorer.
+
+Run the synthetic HTTP and database tests:
+
+```bash
+python -m pytest -q tests/test_api_demo.py
+```
+
+GitHub Actions runs the API tests on Python 3.11, 3.12 and 3.13. The tests cover validation, authorization, duplicate requests, concurrent approvals, expiration projection and audit history.
+
+For curl examples and detailed implementation boundaries, read [the API walkthrough](docs/API_DEMO.md).
+
+## Private production system: high-level architecture only
 
 ```mermaid
 flowchart LR
   U[Discord request form] --> D[Request handler]
-  D --> V[Validation service]
+  D --> V[Identity validation / staff review]
   V --> S[(Private persistent state)]
-  D --> A[Staff review]
-  A --> E[Entitlement service]
+  S --> E[Entitlement adapter]
   E --> X[Private external API]
-  E --> S
-  S --> N[Notification / audit]
+  S --> N[Notifications / audit]
 ```
 
-**Tech context:** Python, discord.py, aiohttp, SQLite and REST API integrations. The production adapters, keys, endpoints and full database implementation are excluded.
+Production-specific concerns include Steam account registration checks, entitlement lifecycle management, approval rules, API failures and replay-safe delivery. **Actual private API adapters and business rules are not included here.** This diagram is a conceptual boundary, not a fully verified deployment map.
 
-Read [Architecture](docs/ARCHITECTURE.md) and [Failure and security design](docs/FAILURE_MODES.md).
+See [private architecture](docs/ARCHITECTURE.md) and [failure modes](docs/FAILURE_MODES.md).
 
-## Public repository contents
+## Repository layout
 
-- [`src/public_interface.py`](src/public_interface.py) — intentionally unimplemented architectural signatures
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — layer responsibilities and data flow
-- [`docs/FAILURE_MODES.md`](docs/FAILURE_MODES.md) — error handling, security and consistency considerations
-- [`examples/config.example.jsonc`](examples/config.example.jsonc) — illustrative, non-production configuration
-- [`NOTICE.md`](NOTICE.md) — publication boundary
+| Path | Purpose |
+| --- | --- |
+| [`api_demo/main.py`](api_demo/main.py) | Runnable fictional FastAPI app + SQLite service |
+| [`tests/test_api_demo.py`](tests/test_api_demo.py) | HTTP, transaction and permission tests |
+| [`requirements-demo.txt`](requirements-demo.txt) | Demo/test dependencies |
+| [`.github/workflows/api-demo.yml`](.github/workflows/api-demo.yml) | CI matrix |
+| [`docs/API_DEMO.md`](docs/API_DEMO.md) | Example calls and security/consistency notes |
+| [`src/public_interface.py`](src/public_interface.py) | **Unimplemented** production interface sketch |
+| [`NOTICE.md`](NOTICE.md) | Disclosure boundary |
 
-## What can be evaluated?
+## Security note
 
-This showcase explains a real integration problem and the engineering decisions it creates. It does **not** claim to demonstrate executable backend logic in this repository. For a runnable self-contained Python example with persistence, authorization and automated tests, see [Discord Ticket Backend Demo](https://github.com/Scumbagsss/advanced-discord-ticket-bot).
+The API uses keys from environment variables and binds locally by default in the example command. The key-to-identity map is an **illustrative testing mechanism**, not production authentication. Never expose this example on the public internet without replacing its authentication, authorization model and operational safeguards.
 
-**Author:** [Scumbagsss](https://github.com/Scumbagsss) · Python backend · automation
+**Contact:** Discord — `scumbagsss` · Telegram — [@dilarion](https://t.me/dilarion)
 
-**Contact:** Discord — `scumbagsss` · Telegram — [@dilarion](https://t.me/dilarion).
+**Author:** [Scumbagsss](https://github.com/Scumbagsss) · Python Backend · Automation
