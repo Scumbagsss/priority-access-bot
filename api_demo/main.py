@@ -1,26 +1,26 @@
 """Synthetic priority-access REST API for portfolio review.
 
 This is NOT the proprietary Discord bot and never calls a game server or payment API.
-Configure separate member/staff API keys through environment variables.
+Members and staff are provisioned locally; HTTP uses expiring bearer sessions.
 """
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import re
-import secrets
 import sqlite3
 from typing import Callable, Iterator
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response, Security
-from fastapi.security import APIKeyHeader
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 
+from .auth import AuthStore, Principal
+
 STEAM_ID_PATTERN = re.compile(r"^7656119[0-9]{10}$")
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 class RequestBody(BaseModel):
@@ -42,10 +42,10 @@ class RejectBody(BaseModel):
     reason: str = Field(min_length=3, max_length=300)
 
 
-@dataclass(frozen=True)
-class Principal:
-    id: str
-    is_staff: bool = False
+class LoginBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=1, max_length=48)
+    password: str = Field(min_length=1, max_length=128)
 
 
 class StoreError(Exception):
@@ -247,31 +247,40 @@ class AccessStore:
             ]
 
 
+
 def create_app(
     db_path: str | Path,
-    credentials: dict[str, Principal],
     now: Callable[[], datetime] | None = None,
 ) -> FastAPI:
-    """Create the API with server-side test credentials. No demo keys are hardcoded."""
-    if not credentials or any(len(token) < 16 for token in credentials):
-        raise ValueError("Supply distinct demo tokens of at least 16 characters")
+    """Synthetic API with locally provisioned accounts and revocable sessions."""
     store = AccessStore(db_path, now)
+    auth = AuthStore(db_path, now)
     app = FastAPI(
         title="Synthetic Priority Access API",
-        description="Portfolio-only; no external Steam, Discord or entitlement delivery.",
-        version="1.0.0",
+        description="Local only; no external Steam, Discord or entitlement delivery.",
+        version="2.0.0",
     )
 
-    def current_principal(key: str | None = Security(api_key_header)) -> Principal:
-        if key is None:
-            raise HTTPException(401, detail="X-API-Key required")
-        for token, principal in credentials.items():
-            if secrets.compare_digest(key, token):
-                return principal
-        raise HTTPException(401, detail="Invalid API key")
+    def token_from_header(
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    ) -> str:
+        if credentials is None or credentials.scheme.lower() != "bearer":
+            raise HTTPException(
+                status_code=401, detail="Bearer session required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return credentials.credentials
+
+    def current_principal(token: str = Depends(token_from_header)) -> Principal:
+        principal = auth.resolve(token)
+        if principal is None:
+            raise HTTPException(
+                status_code=401, detail="Session invalid or expired",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return principal
 
     def guarded(action):
-        # Avoid repeating the storage-to-HTTP exception conversion at every route.
         try:
             return action()
         except StoreError as exc:
@@ -280,6 +289,29 @@ def create_app(
     @app.get("/health")
     def health():
         return {"status": "ok", "mode": "synthetic"}
+
+    @app.post("/auth/login")
+    def login(body: LoginBody):
+        result = auth.authenticate(body.username, body.password)
+        if result is None:
+            raise HTTPException(
+                status_code=401, detail="Invalid credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        token, expires_at = result
+        return {"access_token": token, "token_type": "bearer", "expires_at": expires_at}
+
+    @app.get("/auth/me")
+    def me(actor: Principal = Depends(current_principal)):
+        return {"id": actor.id, "is_staff": actor.is_staff}
+
+    @app.post("/auth/logout")
+    def logout(
+        token: str = Depends(token_from_header),
+        actor: Principal = Depends(current_principal),
+    ):
+        auth.revoke(token)
+        return {"status": "revoked"}
 
     @app.post("/requests")
     def submit(
@@ -327,16 +359,6 @@ def create_app(
 
 
 def create_app_from_env() -> FastAPI:
-    """Uvicorn factory: environment keys are required, with no working defaults."""
-    member_token = os.environ.get("DEMO_MEMBER_TOKEN", "")
-    staff_token = os.environ.get("DEMO_STAFF_TOKEN", "")
-    if len(member_token) < 16 or len(staff_token) < 16 or member_token == staff_token:
-        raise ValueError("Set two distinct DEMO_*_TOKEN values of 16+ chars")
+    """Uvicorn factory: accounts must be explicitly provisioned through CLI."""
     db_path = os.environ.get("DEMO_DB_PATH", "priority-demo.sqlite3")
-    return create_app(
-        db_path,
-        {
-            member_token: Principal("demo-member", False),
-            staff_token: Principal("demo-staff", True),
-        },
-    )
+    return create_app(db_path)

@@ -1,105 +1,98 @@
-# Priority Access Bot — FastAPI Backend Demo
+# Priority Access API — Python Backend & Authentication Demo
 
-**Private Discord entitlement workflow · Public synthetic REST API sample**
+**FastAPI · SQLite · Session authentication · Authorization · Transactional workflows**
 
-[![Synthetic FastAPI demo](https://github.com/Scumbagsss/priority-access-bot/actions/workflows/api-demo.yml/badge.svg)](https://github.com/Scumbagsss/priority-access-bot/actions/workflows/api-demo.yml)
+[![CI](https://github.com/Scumbagsss/priority-access-bot/actions/workflows/api-demo.yml/badge.svg)](https://github.com/Scumbagsss/priority-access-bot/actions/workflows/api-demo.yml)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-REST-009688?logo=fastapi&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-Transactions-003B57?logo=sqlite&logoColor=white)
-![Source](https://img.shields.io/badge/Production%20bot-private-orange)
+![Project](https://img.shields.io/badge/Commercial%20bot-private-orange)
 
-> **Two distinct parts:** The commercial Discord priority-access application remains **private** and is not deployable from this repository. The `api_demo/` directory is a separate **runnable, synthetic FastAPI backend** designed to demonstrate Python engineering skills without exposing the actual API or player data.
+> **Original synthetic backend, not a real DayZ service.** The production Discord priority bot and integrations remain private. Public examples use fictional identities, a local SQLite database and **no** external Steam/DayZ access.
 
-![Synthetic FastAPI request approval visualization](assets/api-demo.svg)
+![Synthetic FastAPI workflow](assets/api-demo.svg)
 
-*Fictional members and local-only entitlements. The diagram does not represent a production screenshot or a connection to Steam/DayZ services.*
+*Concept illustration: local-only simulated entitlements, not production screenshots.*
 
-## What problem does priority access solve?
+## The backend problem
 
-Server priority access involves identity checks, staff approval, entitlement state, database consistency and error handling. Simply adding a Discord role does not implement a complete access workflow.
+An access-request workflow combines user identity, staff permissions, approval state, safe retries and audit records. A real backend cannot trust a client-supplied role or repeat external delivery blindly.
 
-The private application integrates Discord interactions and a real server's access services. Its full code, customer information and private API are not published.
+This repository includes a **self-contained FastAPI demonstration** that covers part of those challenges without exposing the commercial application.
 
-## Public runnable FastAPI demonstration
+## Authentication added to the public demo
 
-This standalone API implements a **fictional, local-only** version of the request lifecycle:
+- User accounts are **explicitly provisioned locally** by a CLI, not through open signup.
+- Passwords are stored as salted **scrypt** hashes, never in plaintext.
+- Login issues random, **60-minute opaque bearer sessions**; only SHA-256 session-token hashes are stored in SQLite.
+- Logout revokes the session immediately.
+- Each request reloads the user's enabled status and staff role from SQLite, so changes apply to existing sessions.
+- All application permissions are checked server-side. Staff can view/review requests; members can view only their own.
+- Invalid, expired or revoked sessions receive HTTP 401.
 
-- `POST /requests`: authenticated member creates a pending request; repeated submission returns the existing pending request.
-- `GET /requests`: staff list/paginate requests.
-- `GET /requests/{id}`: owner or staff can inspect a request.
-- `POST /requests/{id}/approve`: staff grants exactly one **local SQLite entitlement** in an atomic transaction.
-- `POST /requests/{id}/reject`: staff rejects with a required reason.
-- `GET /requests/{id}/events`: owner/staff view audit history.
-- `GET /entitlements/me`: inspect fictional entitlements and calculated expiry.
-- `GET /health`: minimal health response.
+The demo is **not a production identity provider**: it omits request throttling, OAuth/SSO, TLS termination, MFA and deployment hardening. It is intended for local review only.
 
-```mermaid
-flowchart LR
-    A[HTTP client] --> B[API key dependency]
-    B --> C[FastAPI handlers]
-    C --> D[AccessStore]
-    D --> E[(SQLite: requests)]
-    D --> F[(SQLite: entitlements)]
-    D --> G[(SQLite: audit events)]
-```
+## Run locally
 
-**Not connected to Steam or DayZ.** SteamID64-shaped values are checked for syntax only. The demo does not verify ownership or issue real server privileges.
-
-### Run locally
-
-Requires Python **3.11+**. Use two different, newly generated demo API keys; no actual keys are included in the repository.
+Requires Python 3.11+ and the dependencies in [requirements-demo.txt](requirements-demo.txt).
 
 ```bash
 python -m pip install -r requirements-demo.txt
-export DEMO_MEMBER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
-export DEMO_STAFF_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+python -m api_demo.manage --db priority-demo.sqlite3 create-user --username demo-member
+python -m api_demo.manage --db priority-demo.sqlite3 create-user --username demo-moderator --staff
 uvicorn api_demo.main:create_app_from_env --factory --host 127.0.0.1 --port 8000
 ```
 
-Visit **http://127.0.0.1:8000/docs** for the interactive OpenAPI explorer.
+The CLI **prompts for separate passwords** and does not put them in process arguments or source files. Then open [local OpenAPI docs](http://127.0.0.1:8000/docs). Use `POST /auth/login` to obtain a bearer session; pass it as `Authorization: Bearer <token>`.
 
-Run the synthetic HTTP and database tests:
+### Verify
 
 ```bash
 python -m pytest -q tests/test_api_demo.py
 ```
 
-GitHub Actions runs the API tests on Python 3.11, 3.12 and 3.13. The tests cover validation, authorization, duplicate requests, concurrent approvals, expiration projection and audit history.
+GitHub Actions validates the synthetic API on Python 3.11, 3.12 and 3.13. Tests include HTTP login/logout, session expiry, password hashing, role changes, access boundaries, approval idempotency, concurrency and audit persistence.
 
-For curl examples and detailed implementation boundaries, read [the API walkthrough](docs/API_DEMO.md).
+## Endpoint summary
 
-## Private production system: high-level architecture only
+| Method | Endpoint | Permission |
+|---|---|---|
+| POST | `/auth/login` | Password login for provisioned local user |
+| POST | `/auth/logout` | Authenticated session holder |
+| GET | `/auth/me` | Authenticated session holder |
+| POST | `/requests` | Authenticated |
+| GET | `/requests` | Staff only |
+| GET | `/requests/{id}` | Owner or staff |
+| POST | `/requests/{id}/approve` | Staff only |
+| POST | `/requests/{id}/reject` | Staff only |
+| GET | `/requests/{id}/events` | Owner or staff |
+| GET | `/entitlements/me` | Authenticated |
+
+Approval creates only a **fictional SQLite entitlement** in one transaction. It does not grant a real DayZ priority or validate real Steam ownership.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-  U[Discord request form] --> D[Request handler]
-  D --> V[Identity validation / staff review]
-  V --> S[(Private persistent state)]
-  S --> E[Entitlement adapter]
-  E --> X[Private external API]
-  S --> N[Notifications / audit]
+  P[Local users] --> A[Password login]
+  A --> B[(Hashed sessions)]
+  B --> C[Bearer auth dependency]
+  C --> R[Role + ownership check]
+  R --> W[Request workflow]
+  W --> D[(SQLite decisions / audit)]
+  W --> E[(Local synthetic entitlements)]
 ```
 
-Production-specific concerns include Steam account registration checks, entitlement lifecycle management, approval rules, API failures and replay-safe delivery. **Actual private API adapters and business rules are not included here.** This diagram is a conceptual boundary, not a fully verified deployment map.
+See the [complete API walkthrough](docs/API_DEMO.md), [security notes](SECURITY.md) and [failure-mode analysis](docs/FAILURE_MODES.md).
 
-See [private architecture](docs/ARCHITECTURE.md) and [failure modes](docs/FAILURE_MODES.md).
+## Public/private boundary
 
-## Repository layout
+- [`api_demo/auth.py`](api_demo/auth.py) — independent demo auth/session store
+- [`api_demo/main.py`](api_demo/main.py) — FastAPI + local workflow service
+- [`api_demo/manage.py`](api_demo/manage.py) — password-prompted local account creation
+- [`tests/test_api_demo.py`](tests/test_api_demo.py) — synthetic HTTP/database tests
+- [`src/public_interface.py`](src/public_interface.py) — **unimplemented** commercial interface sketch
 
-| Path | Purpose |
-| --- | --- |
-| [`api_demo/main.py`](api_demo/main.py) | Runnable fictional FastAPI app + SQLite service |
-| [`tests/test_api_demo.py`](tests/test_api_demo.py) | HTTP, transaction and permission tests |
-| [`requirements-demo.txt`](requirements-demo.txt) | Demo/test dependencies |
-| [`.github/workflows/api-demo.yml`](.github/workflows/api-demo.yml) | CI matrix |
-| [`docs/API_DEMO.md`](docs/API_DEMO.md) | Example calls and security/consistency notes |
-| [`src/public_interface.py`](src/public_interface.py) | **Unimplemented** production interface sketch |
-| [`NOTICE.md`](NOTICE.md) | Disclosure boundary |
+The private Discord implementation, real identity service adapters, API endpoints, secrets and player data are not released.
 
-## Security note
-
-The API uses keys from environment variables and binds locally by default in the example command. The key-to-identity map is an **illustrative testing mechanism**, not production authentication. Never expose this example on the public internet without replacing its authentication, authorization model and operational safeguards.
-
-**Contact:** Discord — `scumbagsss` · Telegram — [@dilarion](https://t.me/dilarion)
-
-**Author:** [Scumbagsss](https://github.com/Scumbagsss) · Python Backend · Automation
+**Contact:** Discord `scumbagsss` · Telegram [@dilarion](https://t.me/dilarion)
